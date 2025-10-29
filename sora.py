@@ -5,6 +5,9 @@ import time
 import os
 import uuid
 from werkzeug.utils import secure_filename
+import base64, mimetypes
+from PIL import Image
+import io
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend access
@@ -12,7 +15,7 @@ CORS(app)  # Enable CORS for frontend access
 # Configuration
 UPLOAD_FOLDER = 'uploads'
 VIDEO_FOLDER = 'videos'
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 
 # Create necessary directories
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -32,17 +35,34 @@ client = OpenAI(api_key=api_key)
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def image_path_to_data_url(image_path: str) -> str:
+    # Convert unsupported input (like WEBP) to JPEG for GPT-5
+    mime = mimetypes.guess_type(image_path)[0] or "image/jpeg"
+    if mime == "image/webp":
+        img = Image.open(image_path).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        buf.seek(0)
+        raw = buf.read()
+        mime = "image/jpeg"
+    else:
+        with open(image_path, "rb") as f:
+            raw = f.read()
+    b64 = base64.b64encode(raw).decode("utf-8")
+    return f"data:{mime};base64,{b64}"
+
 
 def generate_video_with_image(image_path, description):
     """Generate video using Sora API with image and description"""
     
+    return None
     # Open and upload the image to OpenAI
     with open(image_path, 'rb') as image_file:
         # Create video with image input
         response = client.videos.create(
             model="sora-2",
             prompt=description,
-            image=image_file,
+            input_reference=image_file,
             seconds="4",
             size="720x1280"
         )
@@ -77,6 +97,71 @@ def generate_video_with_image(image_path, description):
     
     return raw
 
+def chatGPT(prompt, image_data_url, verbosity="medium", effort="medium"):
+    response = client.responses.create(
+        model="gpt-5",
+        input=[
+            {
+                "role": "user",
+                "content": [
+                { "type": "input_image", "image_url": image_data_url, "detail": "auto" },
+                { "type": "input_text",  "text": prompt }
+                ]
+            }
+        ],
+        text={"verbosity": verbosity },
+        reasoning={ "effort": effort },
+    )
+    return response
+    # return None
+
+def generate_persona_prompt(name, description):
+    """
+    Load persona_prompt.txt (next to this file), replace placeholders and return the result.
+    Replaces exact tokens: {PRODUCT NAME} and {PRODUCT DESCRIPTION}.
+    """
+    path = os.path.join(os.path.dirname(__file__), "persona_prompt.txt")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            template = f.read()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Required template file not found at: {path}")
+    # Ensure inputs are strings and perform replacements
+    name_str = "" if name is None else str(name)
+    desc_str = "" if description is None else str(description)
+    
+    prompt = template.replace("{PRODUCT NAME}", name_str).replace("{PRODUCT DESCRIPTION}", desc_str)
+    
+    print(prompt)
+    return prompt
+
+def generate_ad_script_prompt(name, description, persona):
+    """
+    Load ad_script_prompt.txt (next to this file), replace placeholders and return the result.
+    Replaces exact tokens: {PERSONA}, {PRODUCT NAME} and {PRODUCT DESCRIPTION}.
+    """
+    path = os.path.join(os.path.dirname(__file__), "ad_script_prompt.txt")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            template = f.read()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Required template file not found at: {path}")
+
+    # Ensure inputs are strings and perform replacements
+    name_str = "" if name is None else str(name)
+    desc_str = "" if description is None else str(description)
+    persona_str = "" if persona is None else str(persona)
+
+    prompt = (
+        template
+        .replace("{PERSONA}", persona_str)
+        .replace("{PRODUCT NAME}", name_str)
+        .replace("{PRODUCT DESCRIPTION}", desc_str)
+    )
+
+    print(prompt)
+    return prompt
+
 
 @app.route('/api/generate-video', methods=['POST'])
 def generate_video():
@@ -89,44 +174,74 @@ def generate_video():
         # Validate request
         if 'image' not in request.files:
             return jsonify({'error': 'No image file provided'}), 400
+        print("received image file")
         
         if 'description' not in request.form:
             return jsonify({'error': 'No product description provided'}), 400
+        print("received description")
+        
+        if 'product_name' not in request.form:
+            return jsonify({'error': 'No product name provided'}), 400
+        print("received product name")
+
         
         image_file = request.files['image']
         description = request.form['description']
+        product_name = request.form['product_name']
         
         if image_file.filename == '':
             return jsonify({'error': 'No image file selected'}), 400
         
         if not allowed_file(image_file.filename):
-            return jsonify({'error': 'Invalid file type. Allowed types: png, jpg, jpeg, gif, webp'}), 400
+            return jsonify({'error': 'Invalid file type. Allowed types: png, jpg, jpeg, webp'}), 400
         
+        print("valid file types")
+
         # Save uploaded image
         filename = secure_filename(image_file.filename)
         unique_filename = f"{uuid.uuid4()}_{filename}"
         image_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
         image_file.save(image_path)
         
+        print("saved image")
+        
+        image_data_url= image_path_to_data_url(image_path)
+        print("converted image to data url")
+        
+        os.remove(image_path)
+
+        persona_prompt = generate_persona_prompt(product_name, description)
+        gpt_response = chatGPT(persona_prompt, image_data_url, verbosity="high", effort="high")
+        persona = getattr(gpt_response, "output_text", "")
+        
+        
+        ad_script_prompt = generate_ad_script_prompt(product_name, description, persona)#the prompt that generates the ad script.
+        gpt_response1 = chatGPT(ad_script_prompt, image_data_url)
+        ad_script = getattr(gpt_response1, "output_text", "")
+        
+        
+        
+
         # Generate video
         video_data = generate_video_with_image(image_path, description)
         
-        # Save video with unique filename
+        # print("returned from generate video fn")
+
+        # # Save video with unique filename
         video_filename = f"{uuid.uuid4()}.mp4"
         video_path = os.path.join(app.config['VIDEO_FOLDER'], video_filename)
         
         with open(video_path, 'wb') as f:
             f.write(video_data)
         
-        # Clean up uploaded image
-        os.remove(image_path)
         
         # Generate video URL
         video_url = url_for('serve_video', filename=video_filename, _external=True)
         
         return jsonify({
             'success': True,
-            'video_url': video_url,
+            # 'video_url': video_url,
+            'script': ad_script,
             'message': 'Video generated successfully'
         }), 200
         
@@ -148,6 +263,10 @@ def health_check():
     """Health check endpoint"""
     return jsonify({'status': 'healthy'}), 200
 
+@app.route('/', methods=['GET'])
+def home():
+    """Home endpoint"""
+    return jsonify({'home': 'we out here'}), 200
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
