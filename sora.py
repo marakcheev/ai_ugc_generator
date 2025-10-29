@@ -8,6 +8,7 @@ from werkzeug.utils import secure_filename
 import base64, mimetypes
 from PIL import Image
 import io
+import re
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend access
@@ -115,7 +116,7 @@ def chatGPT(prompt, image_data_url, verbosity="medium", effort="medium"):
     return response
     # return None
 
-def generate_persona_prompt(name, description):
+def generate_persona_prompt(name, description, person_description):
     """
     Load persona_prompt.txt (next to this file), replace placeholders and return the result.
     Replaces exact tokens: {PRODUCT NAME} and {PRODUCT DESCRIPTION}.
@@ -130,12 +131,12 @@ def generate_persona_prompt(name, description):
     name_str = "" if name is None else str(name)
     desc_str = "" if description is None else str(description)
     
-    prompt = template.replace("{PRODUCT NAME}", name_str).replace("{PRODUCT DESCRIPTION}", desc_str)
+    prompt = template.replace("{PRODUCT NAME}", name_str).replace("{PRODUCT DESCRIPTION}", desc_str).replace("{PERSON DESCRIPTION}", person_description)
     
     print("Persona Prompt Created")
     return prompt
 
-def generate_ad_script_prompt(name, description, persona):
+def generate_ad_script_prompt(name, description, persona, tone):
     """
     Load ad_script_prompt.txt (next to this file), replace placeholders and return the result.
     Replaces exact tokens: {PERSONA}, {PRODUCT NAME} and {PRODUCT DESCRIPTION}.
@@ -157,11 +158,29 @@ def generate_ad_script_prompt(name, description, persona):
         .replace("{PERSONA}", persona_str)
         .replace("{PRODUCT NAME}", name_str)
         .replace("{PRODUCT DESCRIPTION}", desc_str)
+        .replace("{TONE}", tone)
     )
 
     print("AD Script Prompt Created")
     return prompt
 
+def parse_scripts(gpt_output: str) -> list[str]:
+    """
+    Extracts scripts labeled like:
+      SCRIPT 1: ...
+      SCRIPT 2: ...
+      SCRIPT 3: ...
+    Returns a list of 3 strings (or fewer if parsing fails).
+    """
+    pattern = r"SCRIPT\s*(\d+)\s*:\s*(.*?)(?=SCRIPT\s*\d+\s*:|$)"
+    blocks = re.findall(pattern, gpt_output, flags=re.I | re.S)
+    # Sort by the captured number, then take only the text
+    blocks_sorted = [text.strip() for num, text in sorted(blocks, key=lambda x: int(x[0]))]
+    return blocks_sorted
+
+@app.route('/api/generate-sora-prompt', methods=['POST'])
+def generate_sora_prompt():
+    return None
 
 @app.route('/api/generate-video', methods=['POST'])
 def generate_video():
@@ -183,11 +202,20 @@ def generate_video():
         if 'product_name' not in request.form:
             return jsonify({'error': 'No product name provided'}), 400
         print("received product name")
-
+        
+        if 'person_description' not in request.form:
+            return jsonify({'error': 'No person description provided'}), 400
+        print("received person description")
+        
+        if 'tone' not in request.form:
+            return jsonify({'error': 'No tone provided'}), 400
+        print("received tone")
         
         image_file = request.files['image']
         description = request.form['description']
         product_name = request.form['product_name']
+        person_description = request.form['person_description']
+        tone = request.form['tone']
         
         if image_file.filename == '':
             return jsonify({'error': 'No image file selected'}), 400
@@ -210,15 +238,15 @@ def generate_video():
         
 
 
-        persona_prompt = generate_persona_prompt(product_name, description)
+        persona_prompt = generate_persona_prompt(product_name, description, person_description)
         gpt_response = chatGPT(persona_prompt, image_data_url, verbosity="high", effort="high")
         persona = getattr(gpt_response, "output_text", "")
         print("Persona Created")
         
-        ad_script_prompt = generate_ad_script_prompt(product_name, description, persona)#the prompt that generates the ad script.
+        ad_script_prompt = generate_ad_script_prompt(product_name, description, persona, tone)#the prompt that generates the ad script.
         gpt_response1 = chatGPT(ad_script_prompt, image_data_url)
         ad_script = getattr(gpt_response1, "output_text", "")
-        print("Final Sora Prompt Created") 
+        print("Final Sora Prompt Created") #makes 3 scripts in 1. need user to pick one before generating.
 
         # ad_script = "Product rotates in a 3D space with upbeat music in the background. Sparkly effects appear around the product to highlight its features."
         
@@ -229,7 +257,7 @@ def generate_video():
         video_data = generate_video_with_image(image_path, ad_script)
         os.remove(image_path)
         
-        # print("returned from generate video fn")
+        print("Saving video...")
 
         # # Save video with unique filename
         video_filename = f"{uuid.uuid4()}.mp4"
@@ -240,6 +268,7 @@ def generate_video():
         
         # Generate video URL
         video_url = url_for('serve_video', filename=video_filename, _external=True)
+        # video_url = "no video generated"
         
         return jsonify({
             'success': True,

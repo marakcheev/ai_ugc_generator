@@ -7,6 +7,7 @@ The final output must ONLY be a description of this person. Do NOT create an ad 
 
 Product Name: {PRODUCT NAME}
 Product Description: {PRODUCT DESCRIPTION}
+Required Persona Description: {PERSON DESCRIPTION}
 
 **// REQUIRED OUTPUT STRUCTURE //**
 Please generate the persona profile using the following five-part structure. Be as descriptive and specific as possible within each section.
@@ -15,6 +16,7 @@ Please generate the persona profile using the following five-part structure. Be 
 * **Name:**
 * **Age:** (Provide a specific age, not a range)
 * **Sex/Gender:**
+* **Ethnicity**
 * **Location:** (e.g., "A trendy suburb of a major tech city like Austin," "A small, artsy town in the Pacific Northwest")
 * **Occupation:** (Be specific. e.g., "Pediatric Nurse," "Freelance Graphic Designer," "High School Chemistry Teacher," "Manages a local coffee shop")
 
