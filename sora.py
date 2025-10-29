@@ -9,6 +9,11 @@ import base64, mimetypes
 from PIL import Image
 import io
 import re
+from threading import Thread, Lock
+import time
+
+JOBS = {}  # job_id -> {"status": "queued|processing|completed|failed", "video_url": None, "message": "", "script": "", "error": None}
+JOBS_LOCK = Lock()
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend access
@@ -51,6 +56,36 @@ def image_path_to_data_url(image_path: str) -> str:
             raw = f.read()
     b64 = base64.b64encode(raw).decode("utf-8")
     return f"data:{mime};base64,{b64}"
+
+
+
+def _update_job(job_id, **kwargs):
+    with JOBS_LOCK:
+        if job_id in JOBS:
+            JOBS[job_id].update(kwargs)
+
+def _process_video_job(job_id, image_path, ad_script):
+    try:
+        _update_job(job_id, status="processing", message="Generating video with Sora...")
+        # video_data = generate_video_with_image(image_path, ad_script)  # reuses your polling logic
+        # try:
+        #     os.remove(image_path)
+        # except Exception:
+        #     pass
+
+        # video_filename = f"{uuid.uuid4()}.mp4"
+        # video_path = os.path.join(app.config['VIDEO_FOLDER'], video_filename)
+        # with open(video_path, 'wb') as f:
+        #     f.write(video_data)
+
+        # video_url = url_for('serve_video', filename=video_filename, _external=True)
+        video_url = "video generation commented out for testing"
+        time.sleep(20)
+        
+        _update_job(job_id, status="completed", video_url=video_url, message="Video generated successfully")
+    except Exception as e:
+        _update_job(job_id, status="failed", error=str(e), message="Video generation failed")
+
 
 
 def generate_video_with_image(image_path, prompt):
@@ -178,9 +213,6 @@ def parse_scripts(gpt_output: str) -> list[str]:
     blocks_sorted = [text.strip() for num, text in sorted(blocks, key=lambda x: int(x[0]))]
     return blocks_sorted
 
-@app.route('/api/generate-sora-prompt', methods=['POST'])
-def generate_sora_prompt():
-    return None
 
 @app.route('/api/generate-video', methods=['POST'])
 def generate_video():
@@ -253,29 +285,51 @@ def generate_video():
         
 
         # Generate video
-        print("Generating video with Sora...")
-        video_data = generate_video_with_image(image_path, ad_script)
-        os.remove(image_path)
+        # print("Generating video with Sora...")
+        # video_data = generate_video_with_image(image_path, ad_script)
+        # os.remove(image_path)
         
-        print("Saving video...")
+        # print("Saving video...")
 
-        # # Save video with unique filename
-        video_filename = f"{uuid.uuid4()}.mp4"
-        video_path = os.path.join(app.config['VIDEO_FOLDER'], video_filename)
+        # # # Save video with unique filename
+        # video_filename = f"{uuid.uuid4()}.mp4"
+        # video_path = os.path.join(app.config['VIDEO_FOLDER'], video_filename)
         
-        with open(video_path, 'wb') as f:
-            f.write(video_data)
+        # with open(video_path, 'wb') as f:
+        #     f.write(video_data)
         
-        # Generate video URL
-        video_url = url_for('serve_video', filename=video_filename, _external=True)
-        # video_url = "no video generated"
+        # # Generate video URL
+        # video_url = url_for('serve_video', filename=video_filename, _external=True)
+        # # video_url = "no video generated"
         
+        # return jsonify({
+        #     'success': True,
+        #     'video_url': video_url,
+        #     'script': ad_script,
+        #     'message': 'Video generated successfully'
+        # }), 200
+        
+        # --- NEW: queue a background job and return job_id immediately ---
+        job_id = str(uuid.uuid4())
+        with JOBS_LOCK:
+            JOBS[job_id] = {
+                "status": "queued",
+                "video_url": None,
+                "message": "Job queued",
+                "script": ad_script,
+                "error": None,
+            }
+
+        # Launch background worker
+        t = Thread(target=_process_video_job, args=(job_id, image_path, ad_script), daemon=True)
+        t.start()
+
+        # Respond fast (no long post)
         return jsonify({
-            'success': True,
-            'video_url': video_url,
-            'script': ad_script,
-            'message': 'Video generated successfully'
-        }), 200
+            "success": True,
+            "job_id": job_id,
+            "script": ad_script
+        }), 202
         
     except Exception as e:
         return jsonify({
@@ -299,6 +353,24 @@ def health_check():
 def home():
     """Home endpoint"""
     return jsonify({'home': 'we out here'}), 200
+
+@app.route('/api/job/<job_id>', methods=['GET'])
+def job_status(job_id):
+    with JOBS_LOCK:
+        data = JOBS.get(job_id)
+
+    if not data:
+        return jsonify({"success": False, "error": "Unknown job_id"}), 404
+
+    # When completed, the same call returns the video_url
+    return jsonify({
+        "success": True,
+        "job_id": job_id,
+        "status": data["status"],          # queued | processing | completed | failed
+        "message": data.get("message"),
+        "video_url": data.get("video_url"),
+        "error": data.get("error"),
+    }), 200
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
