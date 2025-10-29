@@ -52,18 +52,18 @@ def image_path_to_data_url(image_path: str) -> str:
     return f"data:{mime};base64,{b64}"
 
 
-def generate_video_with_image(image_path, description):
+def generate_video_with_image(image_path, prompt):
     """Generate video using Sora API with image and description"""
     
-    return None
+    # return None
     # Open and upload the image to OpenAI
     with open(image_path, 'rb') as image_file:
         # Create video with image input
         response = client.videos.create(
             model="sora-2",
-            prompt=description,
+            prompt=prompt,
             input_reference=image_file,
-            seconds="4",
+            seconds="12",
             size="720x1280"
         )
     
@@ -132,7 +132,7 @@ def generate_persona_prompt(name, description):
     
     prompt = template.replace("{PRODUCT NAME}", name_str).replace("{PRODUCT DESCRIPTION}", desc_str)
     
-    print(prompt)
+    print("Persona Prompt Created")
     return prompt
 
 def generate_ad_script_prompt(name, description, persona):
@@ -159,7 +159,7 @@ def generate_ad_script_prompt(name, description, persona):
         .replace("{PRODUCT DESCRIPTION}", desc_str)
     )
 
-    print(prompt)
+    print("AD Script Prompt Created")
     return prompt
 
 
@@ -208,22 +208,26 @@ def generate_video():
         image_data_url= image_path_to_data_url(image_path)
         print("converted image to data url")
         
-        os.remove(image_path)
+
 
         persona_prompt = generate_persona_prompt(product_name, description)
         gpt_response = chatGPT(persona_prompt, image_data_url, verbosity="high", effort="high")
         persona = getattr(gpt_response, "output_text", "")
-        
+        print("Persona Created")
         
         ad_script_prompt = generate_ad_script_prompt(product_name, description, persona)#the prompt that generates the ad script.
         gpt_response1 = chatGPT(ad_script_prompt, image_data_url)
         ad_script = getattr(gpt_response1, "output_text", "")
-        
+        print("Final Sora Prompt Created") 
+
+        # ad_script = "Product rotates in a 3D space with upbeat music in the background. Sparkly effects appear around the product to highlight its features."
         
         
 
         # Generate video
-        video_data = generate_video_with_image(image_path, description)
+        print("Generating video with Sora...")
+        video_data = generate_video_with_image(image_path, ad_script)
+        os.remove(image_path)
         
         # print("returned from generate video fn")
 
@@ -234,13 +238,12 @@ def generate_video():
         with open(video_path, 'wb') as f:
             f.write(video_data)
         
-        
         # Generate video URL
         video_url = url_for('serve_video', filename=video_filename, _external=True)
         
         return jsonify({
             'success': True,
-            # 'video_url': video_url,
+            'video_url': video_url,
             'script': ad_script,
             'message': 'Video generated successfully'
         }), 200
