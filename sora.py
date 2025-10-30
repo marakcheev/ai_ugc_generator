@@ -64,22 +64,37 @@ def _update_job(job_id, **kwargs):
         if job_id in JOBS:
             JOBS[job_id].update(kwargs)
 
-def _process_video_job(job_id, image_path, ad_script):
+def _process_video_job(job_id, image_path, image_data_url, product_name, description, person_description, tone):
     try:
+        
+        _update_job(job_id, status="processing", message="Generating persona...")
+        persona_prompt = generate_persona_prompt(product_name, description, person_description)
+        gpt_response = chatGPT(persona_prompt, image_data_url, verbosity="high", effort="high")
+        persona = getattr(gpt_response, "output_text", "")
+        print("Persona Created")
+        
+        _update_job(job_id, status="processing", message="Generating script...")
+        ad_script_prompt = generate_ad_script_prompt(product_name, description, persona, tone)#the prompt that generates the ad script.
+        gpt_response1 = chatGPT(ad_script_prompt, image_data_url)
+        ad_script = getattr(gpt_response1, "output_text", "")
+        print("Final Sora Prompt Created")
+        
         _update_job(job_id, status="processing", message="Generating video with Sora...")
-        # video_data = generate_video_with_image(image_path, ad_script)  # reuses your polling logic
-        # try:
-        #     os.remove(image_path)
-        # except Exception:
-        #     pass
+        
+        video_data = generate_video_with_image(image_path, ad_script)  # reuses your polling logic
+        try:
+            os.remove(image_path)
+        except Exception:
+            pass
+        
+        _update_job(job_id, status="processing", message="Saving video...")
+        video_filename = f"{uuid.uuid4()}.mp4"
+        video_path = os.path.join(app.config['VIDEO_FOLDER'], video_filename)
+        with open(video_path, 'wb') as f:
+            f.write(video_data)
 
-        # video_filename = f"{uuid.uuid4()}.mp4"
-        # video_path = os.path.join(app.config['VIDEO_FOLDER'], video_filename)
-        # with open(video_path, 'wb') as f:
-        #     f.write(video_data)
-
-        # video_url = url_for('serve_video', filename=video_filename, _external=True)
-        video_url = "video generation commented out for testing"
+        video_url = url_for('serve_video', filename=video_filename, _external=True)
+        # video_url = "video generation commented out for testing"
         time.sleep(20)
         
         _update_job(job_id, status="completed", video_url=video_url, message="Video generated successfully")
@@ -270,15 +285,15 @@ def generate_video():
         
 
 
-        persona_prompt = generate_persona_prompt(product_name, description, person_description)
-        gpt_response = chatGPT(persona_prompt, image_data_url, verbosity="high", effort="high")
-        persona = getattr(gpt_response, "output_text", "")
-        print("Persona Created")
+        # persona_prompt = generate_persona_prompt(product_name, description, person_description)
+        # gpt_response = chatGPT(persona_prompt, image_data_url, verbosity="high", effort="high")
+        # persona = getattr(gpt_response, "output_text", "")
+        # print("Persona Created")
         
-        ad_script_prompt = generate_ad_script_prompt(product_name, description, persona, tone)#the prompt that generates the ad script.
-        gpt_response1 = chatGPT(ad_script_prompt, image_data_url)
-        ad_script = getattr(gpt_response1, "output_text", "")
-        print("Final Sora Prompt Created") #makes 3 scripts in 1. need user to pick one before generating.
+        # ad_script_prompt = generate_ad_script_prompt(product_name, description, persona, tone)#the prompt that generates the ad script.
+        # gpt_response1 = chatGPT(ad_script_prompt, image_data_url)
+        # ad_script = getattr(gpt_response1, "output_text", "")
+        # print("Final Sora Prompt Created") #makes 3 scripts in 1. need user to pick one before generating.
 
         # ad_script = "Product rotates in a 3D space with upbeat music in the background. Sparkly effects appear around the product to highlight its features."
         
@@ -316,24 +331,24 @@ def generate_video():
                 "status": "queued",
                 "video_url": None,
                 "message": "Job queued",
-                "script": ad_script,
+                # "script": ad_script,
                 "error": None,
             }
 
         # Launch background worker
-        t = Thread(target=_process_video_job, args=(job_id, image_path, ad_script), daemon=True)
+        t = Thread(target=_process_video_job, args=(job_id, image_path, image_data_url, product_name, description, person_description, tone), daemon=True)
         t.start()
 
         # Respond fast (no long post)
         return jsonify({
-            "success": True,
+            "started": True,
             "job_id": job_id,
-            "script": ad_script
+            # "script": ad_script
         }), 202
         
     except Exception as e:
         return jsonify({
-            'success': False,
+            'started': False,
             'error': str(e)
         }), 500
 
