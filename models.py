@@ -40,7 +40,7 @@ class Persona(db.Model):
 
     product_name = db.Column(db.String, nullable=False)
     description = db.Column(db.Text, nullable=False)
-    image_url = db.Column(db.String, nullable=False)
+    image_id = db.Column(db.String, nullable=False)
     persona_json = db.Column(SqliteJSON, nullable=False)       # store the GPT persona dict
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     status = db.Column(db.String, nullable=False, default="processing")     # queued | processing | completed | failed

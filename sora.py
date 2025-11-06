@@ -190,7 +190,7 @@ def persona():
             user_id      = user_id,
             product_name = product_name,
             description  = description,
-            image_url    = img.url,
+            image_id    = image_id,
             persona_json = {},                 # will fill when job completes
             status       = "processing"        # or "queued"
         )
