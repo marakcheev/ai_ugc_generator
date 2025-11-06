@@ -13,15 +13,24 @@ from threading import Thread, Lock
 import time
 import json
 from celery.result import AsyncResult
+from urllib.parse import urlparse
+
+from extensions import db, migrate   # <-- import from extensions
 
 JOBS = {}  # job_id -> {"status": "queued|processing|completed|failed", "video_url": None, "message": "", "script": "", "error": None}
 JOBS_LOCK = Lock()
 
-PERSONAS = {}   # persona_id -> { image_path, product_name, description, persona (dict) }
-SCRIPTS = {}    # scripts_id -> { persona_id, image_path, scripts (list[str]) }
-
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend access
+
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app.db'   # swap to Postgres later
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db.init_app(app)
+migrate.init_app(app, db)
+
+from models import User, Persona, Script, Video, Image  # noqa: E402,F4
+
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
@@ -70,6 +79,223 @@ def _update_job(job_id, **kwargs):
             JOBS[job_id].update(kwargs)
 
 #  -----------------------------------------------------------------------------
+@app.route('/uploads/<filename>')
+def serve_upload(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+@app.route('/api/save-img', methods=['POST'])
+def save_img():
+    try:
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image file provided'}), 400
+        print("received image file")
+
+        image_file = request.files['image']
+        
+        if image_file.filename == '':
+            return jsonify({'error': 'No image file selected'}), 400
+        
+        if not allowed_file(image_file.filename):
+            return jsonify({'error': 'Invalid file type. Allowed types: png, jpg, jpeg, webp'}), 400
+        
+        # print("valid file types")
+
+        filename = secure_filename(image_file.filename)
+        unique_filename = f"{uuid.uuid4()}_{filename}"
+        image_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+        image_file.save(image_path)
+        
+        # print("saved image")
+        
+        # image_data_url= image_path_to_data_url(image_path)
+        public_url = url_for('serve_upload', filename=unique_filename, _external=True)
+        
+        # Create DB row
+        img = Image(
+            user_id = 1,
+            url = public_url,
+        )
+        
+        try:
+            db.session.add(img)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            # Clean up the file if you want
+            # os.remove(image_path)
+            return jsonify({'error': str(e)}), 500
+
+        # Return the handle you’ll reuse later
+        return jsonify({
+            'success': True,
+            'image_id': img.id,
+            'url': img.url
+        }), 201
+        
+
+    except Exception as e:
+        return jsonify({
+            'started': False,
+            'error': str(e)
+        }), 500
+        
+        
+@app.route('/api/persona', methods=['POST'])
+def persona(): 
+    try: 
+        # data = request.form if request.form else request.get_json(force=True, silent=True) or {}
+
+        if 'description' not in request.form:
+            return jsonify({'error': 'No product description provided'}), 400
+        print("received description")
+        
+        if 'product_name' not in request.form:
+            return jsonify({'error': 'No product name provided'}), 400
+        print("received product name")
+        
+        if 'person_description' not in request.form:
+            return jsonify({'error': 'No person description provided'}), 400
+        print("received person description")
+        
+        if 'image_id' not in request.form:
+            return jsonify({'error': 'No image_id provided'}), 400
+        print("received image_id")
+        
+        if 'user_id' not in request.form:
+            return jsonify({'error': 'No user_id provided'}), 400
+        print("received user_id")
+        
+        # Required fields
+        description = request.form['description']
+        product_name = request.form['product_name']
+        person_desc = request.form['person_description']
+        image_id = request.form("image_id")
+        user_id = request.form("user_id")
+        
+        if not product_name or not description or not person_desc:
+            return jsonify({'error': 'product_name and description are required'}), 400
+        
+        # Resolve image URL: prefer image_id lookup, else accept image_url directly
+        img = Image.query.get(image_id)
+        if not img:
+            return jsonify({'error': 'Image not found'}), 404
+        
+        # Quick validation of URL
+        try:
+            _ = urlparse(img.url)
+        except Exception:
+            return jsonify({'error': 'Invalid image_url'}), 400
+        
+        persona_row = Persona(
+            user_id      = user_id,
+            product_name = product_name,
+            description  = description,
+            image_url    = img.url,
+            persona_json = {},                 # will fill when job completes
+            status       = "processing"        # or "queued"
+        )
+        db.session.add(persona_row)
+        db.session.commit()  # get persona_row.id
+        
+        prompt = generate_persona_prompt(product_name, description, person_desc)
+        
+        job_id, job_status = enqueue_chatGPT_background(
+            prompt=prompt,
+            image_url=img.url,
+            verbosity="high",
+            effort="high"
+        )
+
+        # Save the OpenAI job id on the Persona
+        persona_row.openai_job_id = job_id
+        persona_row.status = "queued" if job_status == "queued" else "processing"
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "persona_id": persona_row.id,
+            "openai_job_id": job_id,
+            "status": persona_row.status
+        }), 202
+        
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/persona/<persona_id>/status', methods=['GET'])
+def persona_status(persona_id):
+    persona = Persona.query.get_or_404(persona_id)
+
+    # If already done or failed, return immediately from DB
+    if persona.status in ("completed", "failed"):
+        return jsonify({
+            "status": persona.status,
+            "persona": persona.persona_json
+        }), 200
+
+    # If no job started yet
+    if not persona.openai_job_id:
+        return jsonify({
+            "status": persona.status,
+            "message": "No OpenAI job assigned yet."
+        }), 200
+
+    try:
+        # Poll OpenAI to check if the job has completed
+        resp = client.responses.retrieve(persona.openai_job_id)
+        persona.status = resp.status  # "queued" | "in_progress" | "completed" | "failed"
+
+        # If it's done, extract the output
+        if resp.status == "completed":
+            output = getattr(resp, "output_text", "").strip()
+            try:
+                persona.persona_json = json.loads(output)
+            except Exception:
+                persona.persona_json = {"raw": output}
+            persona.status = "completed"
+            db.session.commit()
+
+        elif resp.status == "failed":
+            persona.status = "failed"
+            db.session.commit()
+
+    except Exception as e:
+        # Network/API error — don't crash, just return current DB state
+        print(f"Error retrieving job {persona.openai_job_id}: {e}")
+
+    # Final response to frontend
+    return jsonify({
+        "status": persona.status,
+        "persona": persona.persona_json if persona.status == "completed" else None
+    }), 200
+
+
+
+def enqueue_chatGPT_background(prompt: str, image_url: str, verbosity="high", effort="high"):
+    """
+    Runs a GPT-5 Vision request in background mode and returns (job_id, status).
+    """
+    resp = client.responses.create(
+        model="gpt-5",
+        input=[{
+            "role": "user",
+            "content": [
+                {"type": "input_image", "image_url": image_url, "detail": "auto"},
+                {"type": "input_text",  "text": prompt}
+            ]
+        }],
+        text={"verbosity": verbosity},
+        reasoning={"effort": effort},
+        background=True,
+        store=True
+    )
+    return resp.id, getattr(resp, "status", "queued")
+
+# FUNCTIONS
+# ==============================================================================
 
 def _process_video_job(job_id, image_path, image_data_url, product_name, description, person_description, tone):
     try:
@@ -153,7 +379,7 @@ def generate_video_with_image(image_path, prompt):
     
     return raw
 
-def chatGPT(prompt, image_data_url, verbosity="medium", effort="medium"):
+def chatGPT(prompt, image_data_url, verbosity="medium", effort="medium"): #BLOCKING
     response = client.responses.create(
         model="gpt-5",
         input=[
@@ -219,6 +445,7 @@ def generate_ad_script_prompt(name, description, persona, tone):
     print("AD Script Prompt Created")
     return prompt
 
+
 #  -----------------------------------------------------------------------------
 # Old endpoints below, new ones after
 @app.route('/api/generate-video', methods=['POST'])
@@ -274,47 +501,6 @@ def generate_video():
         
         image_data_url= image_path_to_data_url(image_path)
         print("converted image to data url")
-        
-
-
-        # persona_prompt = generate_persona_prompt(product_name, description, person_description)
-        # gpt_response = chatGPT(persona_prompt, image_data_url, verbosity="high", effort="high")
-        # persona = getattr(gpt_response, "output_text", "")
-        # print("Persona Created")
-        
-        # ad_script_prompt = generate_ad_script_prompt(product_name, description, persona, tone)#the prompt that generates the ad script.
-        # gpt_response1 = chatGPT(ad_script_prompt, image_data_url)
-        # ad_script = getattr(gpt_response1, "output_text", "")
-        # print("Final Sora Prompt Created") #makes 3 scripts in 1. need user to pick one before generating.
-
-        # ad_script = "Product rotates in a 3D space with upbeat music in the background. Sparkly effects appear around the product to highlight its features."
-        
-        
-
-        # Generate video
-        # print("Generating video with Sora...")
-        # video_data = generate_video_with_image(image_path, ad_script)
-        # os.remove(image_path)
-        
-        # print("Saving video...")
-
-        # # # Save video with unique filename
-        # video_filename = f"{uuid.uuid4()}.mp4"
-        # video_path = os.path.join(app.config['VIDEO_FOLDER'], video_filename)
-        
-        # with open(video_path, 'wb') as f:
-        #     f.write(video_data)
-        
-        # # Generate video URL
-        # video_url = url_for('serve_video', filename=video_filename, _external=True)
-        # # video_url = "no video generated"
-        
-        # return jsonify({
-        #     'success': True,
-        #     'video_url': video_url,
-        #     'script': ad_script,
-        #     'message': 'Video generated successfully'
-        # }), 200
         
         # --- NEW: queue a background job and return job_id immediately ---
         job_id = str(uuid.uuid4())
@@ -379,134 +565,20 @@ def job_status(job_id):
         "error": data.get("error"),
     }), 200
     
+
+
+
+
+
+
+
+
+
+
+
+
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)
     
-# #  -------------------------------------------------------------------------------
-# # New endpoints 
-# @app.route('/api/persona', methods=['POST'])
-# def create_persona():
-#     try:
-#         if 'image' not in request.files:
-#             return jsonify({'error': 'No image file provided'}), 400
-#         if 'product_name' not in request.form or 'description' not in request.form or 'person_description' not in request.form:
-#             return jsonify({'error': 'Missing parameters'}), 400
-
-#         image_file = request.files['image']
-#         product_name = request.form['product_name']
-#         description = request.form['description']
-#         persona_description = request.form.get('person_description', '')
-
-#         if image_file.filename == '':
-#             return jsonify({'error': 'No image file selected'}), 400
-#         if not allowed_file(image_file.filename):
-#             return jsonify({'error': 'Invalid file type. Allowed: png, jpg, jpeg, webp'}), 400
-
-#         # Save image
-#         filename = secure_filename(image_file.filename)
-#         unique_filename = f"{uuid.uuid4()}_{filename}"
-#         image_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
-#         image_file.save(image_path)
-#         # GPT-5 Vision: persona JSON
-#         image_data_url = image_path_to_data_url(image_path)
-#         persona_prompt = generate_persona_prompt(product_name, description, persona_description)
-#         gpt_response = chatGPT(persona_prompt, image_data_url, verbosity="high", effort="high")
-#         persona = getattr(gpt_response, "output_text", "")
-#         print("Persona Created")
-
-#         persona_id = str(uuid.uuid4())
-#         with JOBS_LOCK:
-#             PERSONAS[persona_id] = {
-#                 "image_path": image_path,
-#                 "product_name": product_name,
-#                 "description": description,
-#                 "persona": persona
-#             }
-
-#         return jsonify({"success": True, "persona_id": persona_id, "persona": persona}), 200
-
-#     except Exception as e:
-#         return jsonify({"success": False, "error": str(e)}), 500
     
-# @app.route('/api/script', methods=['POST'])
-# def create_script():
-#     try:
-#         persona_id = request.form.get('persona_id')
-#         if not persona_id:
-#             return jsonify({'error': 'persona_id required'}), 400
-
-#         with JOBS_LOCK:
-#             rec = PERSONAS.get(persona_id)
-#         if not rec:
-#             return jsonify({'error': 'persona not found'}), 404
-
-#         image_path   = rec["image_path"]
-#         product_name = rec["product_name"]
-#         description  = rec["description"]
-#         persona      = rec["persona"]
-
-#         # Convert persona dict to string for prompt
-#         persona_str = json.dumps(persona, ensure_ascii=False)
-
-#         # Embed image into GPT call
-#         image_data_url = image_path_to_data_url(image_path)
-        
-#         ad_script_prompt = generate_ad_script_prompt(product_name, description, persona, tone)#the prompt that generates the ad script.
-#         gpt_response1 = chatGPT(ad_script_prompt, image_data_url)
-#         ad_script = getattr(gpt_response1, "output_text", "")
-#         print("Final Sora Prompt Created")
-
-#         # Store script
-#         script_id = str(uuid.uuid4())
-#         with JOBS_LOCK:
-#             SCRIPTS[script_id] = {
-#                 "persona_id": persona_id,
-#                 "image_path": image_path,
-#                 "script": ad_script
-#             }
-
-#         return jsonify({
-#             "success": True,
-#             "script_id": script_id,
-#             "script": ad_script
-#         }), 200
-
-#     except Exception as e:
-#         return jsonify({"success": False, "error": str(e)}), 500
-
-# @app.route('/api/video', methods=['POST'])
-# def create_video():
-#     try:
-#         script_id = request.form.get('script_id')
-#         if not script_id:
-#             return jsonify({'error': 'script_id required'}), 400
-
-#         with JOBS_LOCK:
-#             rec = SCRIPTS.get(script_id)
-#         if not rec:
-#             return jsonify({'error': 'script not found'}), 404
-
-#         image_path = rec["image_path"]
-#         ad_script = rec["script"]
-
-#         job_id = str(uuid.uuid4())
-#         with JOBS_LOCK:
-#             JOBS[job_id] = {
-#                 "status": "queued",
-#                 "video_url": None,
-#                 "message": "Job queued",
-#                 "error": None,
-#             }
-
-#         t = Thread(target=_process_video_job, args=(job_id, image_path, ad_script), daemon=True)
-#         t.start()
-
-#         return jsonify({
-#             "success": True,
-#             "job_id": job_id,
-#             "status_url": url_for('job_status', job_id=job_id, _external=True)
-#         }), 202
-
-#     except Exception as e:
-#         return jsonify({"success": False, "error": str(e)}), 500
-
-# if __name__ == '__main__':
-#     app.run(debug=True, host='0.0.0.0', port=5000)
