@@ -169,8 +169,8 @@ def persona():
         description = request.form['description']
         product_name = request.form['product_name']
         person_desc = request.form['person_description']
-        image_id = request.form("image_id")
-        user_id = request.form("user_id")
+        image_id = request.form["image_id"]
+        user_id = request.form["user_id"]
         
         if not product_name or not description or not person_desc:
             return jsonify({'error': 'product_name and description are required'}), 400
@@ -181,10 +181,10 @@ def persona():
             return jsonify({'error': 'Image not found'}), 404
         
         # Quick validation of URL
-        try:
-            _ = urlparse(img.url)
-        except Exception:
-            return jsonify({'error': 'Invalid image_url'}), 400
+        # try:
+        #     _ = urlparse(img.url)
+        # except Exception:
+        #     return jsonify({'error': 'Invalid image_url'}), 400
         
         persona_row = Persona(
             user_id      = user_id,
@@ -199,9 +199,15 @@ def persona():
         
         prompt = generate_persona_prompt(product_name, description, person_desc)
         
+        filename = os.path.basename(urlparse(img.url).path)
+        image_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+
+        # turn into data URL for OpenAI (works from localhost)
+        image_data_url = image_path_to_data_url(image_path)
+        
         job_id, job_status = enqueue_chatGPT_background(
             prompt=prompt,
-            image_url=img.url,
+            image_url=image_data_url,
             verbosity="high",
             effort="high"
         )
