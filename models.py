@@ -81,9 +81,12 @@ class Video(db.Model):
     script_id = db.Column(db.String, db.ForeignKey("scripts.id"), nullable=False)
 
     status = db.Column(db.String, nullable=False, default="queued")  # queued|processing|completed|failed
+    openai_job_id = db.Column(db.String, index=True)
+    
     file_path = db.Column(db.String, nullable=True)                   # local path or S3 key
     video_url = db.Column(db.String, nullable=True)                   # public URL if serving via HTTP
     error = db.Column(db.Text, nullable=True)
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     completed_at = db.Column(db.DateTime, nullable=True)
 

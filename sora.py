@@ -384,7 +384,117 @@ def script_status(script_id):
         "status": s.status,
         "script": s.script_json if s.status == "completed" else None
     }), 200
+    
+    
+@app.route('/api/video', methods=['POST'])
+def video(): 
+    try:
+        if 'script_id' not in request.form:
+            return jsonify({'error': 'No script_id provided'}), 400
+        
+        script_id = request.form['script_id']
+        
+        script = Script.query.get(script_id)
 
+        p = Persona.query.get_or_404(script.persona_id)
+        img = Image.query.get(p.image_id)
+        
+        video_row = Video(
+            script_id = script.id,
+            status = "processing"
+        )
+        db.session.add(video_row)
+        db.session.commit()  # get video_row.id
+        
+        prompt = script.script_txt
+        
+        job_id, job_status = enqueue_sora_background(prompt, img.path)
+        
+        video_row.openai_job_id = job_id
+        video_row.status = "queued" if job_status == "queued" else "processing"
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "video_id": video_row.id,
+            "openai_job_id": job_id,
+            "status": video_row.status
+        }), 202
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+        
+@app.route('/api/video/<video_id>/status', methods=['GET'])
+def video_status(video_id):
+    
+    v = Video.query.get_or_404(video_id)
+    
+       # If already done or failed, return immediately from DB
+    if v.status in ("completed", "failed"):
+        return jsonify({
+            "status": v.status,
+            "video_url": v.video_url
+        }), 200
+
+    # If no job started yet
+    if not v.openai_job_id:
+        return jsonify({
+            "status": v.status,
+            "message": "No OpenAI job assigned yet."
+        }), 200
+        
+    try:
+        # Poll OpenAI to check if the job has completed
+        print(v.openai_job_id)
+        resp = client.videos.retrieve(v.openai_job_id)
+        v.status = resp.status  # "queued" | "in_progress" | "completed" | "failed"
+
+        
+        # If it's done, extract the output
+        if resp.status == "completed":
+            content = client.videos.download_content(v.openai_job_id)
+            
+            if hasattr(content, "read") and callable(content.read):
+                try:
+                    raw = content.read()
+                except TypeError:
+                    raw = content.read
+            elif hasattr(content, "content"):
+                raw = content.content
+            elif isinstance(content, (bytes, bytearray)):
+                raw = content
+            else:
+                raw = bytes(content)
+            
+            video_filename = f"{uuid.uuid4()}.mp4"
+            video_path = os.path.join(app.config['VIDEO_FOLDER'], video_filename)
+            with open(video_path, 'wb') as f:
+                f.write(raw)
+                
+            video_url = url_for('serve_video', filename=video_filename, _external=True)
+            
+            v.file_path = video_path
+            v.video_url = video_url
+            v.status = "completed"
+            db.session.commit()
+
+        elif resp.status == "failed":
+            v.status = "failed"
+            db.session.commit()
+
+    except Exception as e:
+        # Network/API error — don't crash, just return current DB state
+        print(f"Error retrieving job {v.openai_job_id}: {e}")
+        
+    # Final response to frontend
+    return jsonify({
+        "status": v.status,
+        "video_url": video_url if v.status == "completed" else None
+    }), 200
+    
 
 def enqueue_chatGPT_background(prompt: str, image_url: str, verbosity="medium", effort="medium"):
     """
@@ -405,6 +515,20 @@ def enqueue_chatGPT_background(prompt: str, image_url: str, verbosity="medium", 
         store=True
     )
     return resp.id, getattr(resp, "status", "queued")
+
+def enqueue_sora_background(prompt, image_path):
+    
+    with open(image_path, 'rb') as image_file:
+        response = client.videos.create(
+            model="sora-2",
+            prompt=prompt,
+            input_reference=image_file,
+            seconds="12",
+            size="720x1280",
+            # background=True,
+            # store=True
+        )
+    return response.id, getattr(response, "status", "queued")
 
 # FUNCTIONS
 # ==============================================================================
@@ -439,6 +563,7 @@ def _process_video_job(job_id, image_path, image_data_url, product_name, descrip
         #     f.write(video_data)
 
         # video_url = url_for('serve_video', filename=video_filename, _external=True)
+        
         video_url = "video generation commented out for testing"
         time.sleep(20)
         
@@ -459,6 +584,7 @@ def generate_video_with_image(image_path, prompt):
             input_reference=image_file,
             seconds="12",
             size="720x1280"
+            
         )
     
     video_id = response.id
