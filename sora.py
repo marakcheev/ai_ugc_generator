@@ -114,6 +114,7 @@ def save_img():
         img = Image(
             user_id = 1,
             url = public_url,
+            path = image_path
         )
         
         try:
@@ -199,11 +200,8 @@ def persona():
         
         prompt = generate_persona_prompt(product_name, description, person_desc)
         
-        filename = os.path.basename(urlparse(img.url).path)
-        image_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-
         # turn into data URL for OpenAI (works from localhost)
-        image_data_url = image_path_to_data_url(image_path)
+        image_data_url = image_path_to_data_url(img.path)  # <-- This is the slow part
         
         job_id, job_status = enqueue_chatGPT_background(
             prompt=prompt,
@@ -239,7 +237,7 @@ def persona_status(persona_id):
     if persona.status in ("completed", "failed"):
         return jsonify({
             "status": persona.status,
-            "persona": persona.persona_json
+            "persona": persona.persona_txt
         }), 200
 
     # If no job started yet
@@ -259,8 +257,10 @@ def persona_status(persona_id):
             output = getattr(resp, "output_text", "").strip()
             try:
                 persona.persona_json = json.loads(output)
+                persona.persona_txt = json.loads(output).get("raw", "")
             except Exception:
                 persona.persona_json = {"raw": output}
+                persona.persona_txt = output
             persona.status = "completed"
             db.session.commit()
 
@@ -279,8 +279,114 @@ def persona_status(persona_id):
     }), 200
 
 
+@app.route('/api/script', methods=['POST'])
+def script(): 
+    try: 
+        if 'persona_id' not in request.form:
+            return jsonify({'error': 'No persona_id provided'}), 400
+        print("received persona_id")
+        
+        if 'tone' not in request.form:
+            return jsonify({'error': 'No tone provided'}), 400
+        print("received tone")
+        
+        persona_id = request.form['persona_id']
+        tone = request.form['tone']
+        
+        persona = Persona.query.get(persona_id)
+        if not persona:
+            return jsonify({'error': 'Persona not found'}), 404
+        
+        img = Image.query.get(persona.image_id)
+        if not img:
+            return jsonify({'error': 'Image not found'}), 404
+        
+        script_row = Script(
+            persona_id  = persona.id,
+            tone        = tone,
+            status      = "processing",        # or "queued"
+            script_txt = ""
+        )
+        db.session.add(script_row)
+        db.session.commit()  # get script_row.id
+        
+        prompt = generate_ad_script_prompt(persona.product_name, persona.description, persona.persona_txt, tone)
+        
+        image_data_url = image_path_to_data_url(img.path)  # <-- This is the slow part
+        
+        job_id, job_status = enqueue_chatGPT_background(
+            prompt=prompt,
+            image_url=image_data_url
+        )
+        
+        script_row.openai_job_id = job_id
+        script_row.status = "queued" if job_status == "queued" else "processing"
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "script_id": script_row.id,
+            "openai_job_id": job_id,
+            "status": script_row.status
+        }), 202
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+        
+@app.route('/api/script/<script_id>/status', methods=['GET'])
+def script_status(script_id):
+    s = Script.query.get_or_404(script_id)
 
-def enqueue_chatGPT_background(prompt: str, image_url: str, verbosity="high", effort="high"):
+    # If already done or failed, return immediately from DB
+    if s.status in ("completed", "failed"):
+        return jsonify({
+            "status": s.status,
+            "script": s.script_txt
+        }), 200
+
+    # If no job started yet
+    if not s.openai_job_id:
+        return jsonify({
+            "status": s.status,
+            "message": "No OpenAI job assigned yet."
+        }), 200
+
+    try:
+        # Poll OpenAI to check if the job has completed
+        resp = client.responses.retrieve(s.openai_job_id)
+        s.status = resp.status  # "queued" | "in_progress" | "completed" | "failed"
+
+        # If it's done, extract the output
+        if resp.status == "completed":
+            output = getattr(resp, "output_text", "").strip()
+            try:
+                s.script_json = json.loads(output)
+                s.script_txt = json.loads(output).get("raw", "")
+            except Exception:
+                s.script_json = {"raw": output}
+                s.script_txt = output
+            s.status = "completed"
+            db.session.commit()
+
+        elif resp.status == "failed":
+            s.status = "failed"
+            db.session.commit()
+
+    except Exception as e:
+        # Network/API error — don't crash, just return current DB state
+        print(f"Error retrieving job {s.openai_job_id}: {e}")
+
+    # Final response to frontend
+    return jsonify({
+        "status": s.status,
+        "script": s.script_json if s.status == "completed" else None
+    }), 200
+
+
+def enqueue_chatGPT_background(prompt: str, image_url: str, verbosity="medium", effort="medium"):
     """
     Runs a GPT-5 Vision request in background mode and returns (job_id, status).
     """

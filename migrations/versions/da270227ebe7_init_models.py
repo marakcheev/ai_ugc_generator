@@ -1,8 +1,8 @@
 """init models
 
-Revision ID: 6426c3ea1eb8
+Revision ID: da270227ebe7
 Revises: 
-Create Date: 2025-11-05 23:28:43.703615
+Create Date: 2025-11-06 20:17:32.660667
 
 """
 from alembic import op
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import sqlite
 
 # revision identifiers, used by Alembic.
-revision = '6426c3ea1eb8'
+revision = 'da270227ebe7'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -30,6 +30,7 @@ def upgrade():
     sa.Column('id', sa.String(), nullable=False),
     sa.Column('user_id', sa.String(), nullable=False),
     sa.Column('url', sa.String(), nullable=False),
+    sa.Column('path', sa.String(), nullable=False),
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -42,8 +43,9 @@ def upgrade():
     sa.Column('user_id', sa.String(), nullable=True),
     sa.Column('product_name', sa.String(), nullable=False),
     sa.Column('description', sa.Text(), nullable=False),
-    sa.Column('image_url', sa.String(), nullable=False),
+    sa.Column('image_id', sa.String(), nullable=False),
     sa.Column('persona_json', sqlite.JSON(), nullable=False),
+    sa.Column('persona_txt', sa.Text(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.Column('status', sa.String(), nullable=False),
     sa.Column('openai_job_id', sa.String(), nullable=True),
@@ -57,14 +59,16 @@ def upgrade():
     op.create_table('scripts',
     sa.Column('id', sa.String(), nullable=False),
     sa.Column('persona_id', sa.String(), nullable=False),
-    sa.Column('script_text', sa.Text(), nullable=False),
+    sa.Column('script_txt', sa.Text(), nullable=True),
     sa.Column('tone', sa.String(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.Column('status', sa.String(), nullable=False),
+    sa.Column('openai_job_id', sa.String(), nullable=True),
     sa.ForeignKeyConstraint(['persona_id'], ['personas.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     with op.batch_alter_table('scripts', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_scripts_openai_job_id'), ['openai_job_id'], unique=False)
         batch_op.create_index('ix_scripts_persona_created', ['persona_id', 'created_at'], unique=False)
 
     op.create_table('videos',
@@ -93,6 +97,7 @@ def downgrade():
     op.drop_table('videos')
     with op.batch_alter_table('scripts', schema=None) as batch_op:
         batch_op.drop_index('ix_scripts_persona_created')
+        batch_op.drop_index(batch_op.f('ix_scripts_openai_job_id'))
 
     op.drop_table('scripts')
     with op.batch_alter_table('personas', schema=None) as batch_op:

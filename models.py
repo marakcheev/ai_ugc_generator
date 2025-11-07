@@ -27,6 +27,7 @@ class Image(db.Model):
     user_id = db.Column(db.String, db.ForeignKey("users.id"), nullable=False)
 
     url = db.Column(db.String, nullable=False)
+    path = db.Column(db.String, nullable=False)          # local path or S3 key
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (
@@ -41,7 +42,11 @@ class Persona(db.Model):
     product_name = db.Column(db.String, nullable=False)
     description = db.Column(db.Text, nullable=False)
     image_id = db.Column(db.String, nullable=False)
+    
     persona_json = db.Column(SqliteJSON, nullable=False)       # store the GPT persona dict
+    persona_txt = db.Column(db.Text, nullable=True)       # full raw text
+
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     status = db.Column(db.String, nullable=False, default="processing")     # queued | processing | completed | failed
     openai_job_id = db.Column(db.String, index=True)
@@ -57,11 +62,12 @@ class Script(db.Model):
     id = db.Column(db.String, primary_key=True, default=gen_id)
     persona_id = db.Column(db.String, db.ForeignKey("personas.id"), nullable=False)
 
-    script_text = db.Column(db.Text, nullable=False)
+    script_txt = db.Column(db.Text, nullable=True)
+    
     tone = db.Column(db.String, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     status = db.Column(db.String, nullable=False, default="processing")     # queued | processing | completed | failed
-
+    openai_job_id = db.Column(db.String, index=True)
     
     videos = db.relationship("Video", backref="script", lazy=True, cascade="all,delete")
 
