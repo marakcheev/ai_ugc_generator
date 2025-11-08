@@ -15,6 +15,9 @@ import json
 from celery.result import AsyncResult
 from urllib.parse import urlparse
 
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
 from extensions import db, migrate   # <-- import from extensions
 
 JOBS = {}  # job_id -> {"status": "queued|processing|completed|failed", "video_url": None, "message": "", "script": "", "error": None}
@@ -22,6 +25,8 @@ JOBS_LOCK = Lock()
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend access
+
+limiter = Limiter(get_remote_address, app=app, default_limits=["60/minute"])
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app.db'   # swap to Postgres later
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -83,6 +88,7 @@ def _update_job(job_id, **kwargs):
 def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
+@limiter.limit("30/minute")
 @app.route('/api/save-img', methods=['POST'])
 def save_img():
     try:
@@ -140,7 +146,7 @@ def save_img():
             'error': str(e)
         }), 500
         
-        
+@limiter.limit("10/minute")
 @app.route('/api/persona', methods=['POST'])
 def persona(): 
     try: 
@@ -228,7 +234,8 @@ def persona():
             'success': False,
             'error': str(e)
         }), 500
-
+        
+@limiter.limit("60/minute")
 @app.route('/api/persona/<persona_id>/status', methods=['GET'])
 def persona_status(persona_id):
     persona = Persona.query.get_or_404(persona_id)
@@ -278,7 +285,7 @@ def persona_status(persona_id):
         "persona": persona.persona_json if persona.status == "completed" else None
     }), 200
 
-
+@limiter.limit("10/minute")
 @app.route('/api/script', methods=['POST'])
 def script(): 
     try: 
@@ -335,7 +342,8 @@ def script():
             'success': False,
             'error': str(e)
         }), 500
-        
+     
+@limiter.limit("60/minute")   
 @app.route('/api/script/<script_id>/status', methods=['GET'])
 def script_status(script_id):
     s = Script.query.get_or_404(script_id)
@@ -385,7 +393,7 @@ def script_status(script_id):
         "script": s.script_json if s.status == "completed" else None
     }), 200
     
-    
+@limiter.limit("10/minute")
 @app.route('/api/video', methods=['POST'])
 def video(): 
     try:
@@ -427,6 +435,7 @@ def video():
             'error': str(e)
         }), 500
         
+@limiter.limit("60/minute")       
 @app.route('/api/video/<video_id>/status', methods=['GET'])
 def video_status(video_id):
     
@@ -533,6 +542,7 @@ def enqueue_sora_background(prompt, image_path):
 # FUNCTIONS
 # ==============================================================================
 
+##OLD - NOT USED ANYMORE
 def _process_video_job(job_id, image_path, image_data_url, product_name, description, person_description, tone):
     try:
         
@@ -571,6 +581,7 @@ def _process_video_job(job_id, image_path, image_data_url, product_name, descrip
     except Exception as e:
         _update_job(job_id, status="failed", error=str(e), message="Video generation failed")
 
+##OLD - NOT USED ANYMORE
 def generate_video_with_image(image_path, prompt):
     """Generate video using Sora API with image and description"""
     
@@ -617,6 +628,7 @@ def generate_video_with_image(image_path, prompt):
     
     return raw
 
+##OLD - NOT USED ANYMORE
 def chatGPT(prompt, image_data_url, verbosity="medium", effort="medium"): #BLOCKING
     response = client.responses.create(
         model="gpt-5",
@@ -684,8 +696,7 @@ def generate_ad_script_prompt(name, description, persona, tone):
     return prompt
 
 
-#  -----------------------------------------------------------------------------
-# Old endpoints below, new ones after
+##OLD - NOT USED ANYMORE
 @app.route('/api/generate-video', methods=['POST'])
 def generate_video():
     """
