@@ -34,7 +34,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db.init_app(app)
 migrate.init_app(app, db)
 
-from models import User, Persona, Script, Video, Image  # noqa: E402,F4
+from models import User, Persona, Script, Video, Image, Project, Project_images  # noqa: E402,F4
 
 
 # Configuration
@@ -146,6 +146,75 @@ def save_img():
             'error': str(e)
         }), 500
         
+@app.route('/api/add-project-img', methods=['POST'])
+def add_img_to_project():
+    try:
+        if 'image_id' not in request.form:
+            return jsonify({'error': 'No image_id provided'}), 400
+        print("received image_id")
+        
+        if 'project_id' not in request.form:
+            return jsonify({'error': 'No project_id provided'}), 400
+        print("received project_id")
+        
+        image_id = request.form['image_id']
+        project_id = request.form['project_id']
+        
+        project_image_row = Project_images(
+            project_id = project_id,
+            image_id = image_id
+        )
+        db.session.add(project_image_row)
+        db.session.commit()  # get project_image_row.id
+        
+        return jsonify({
+            "success": True,
+            "project_id": project_image_row.project_id,
+            "image_id": project_image_row.image_id
+        }), 202
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+        
+@app.route('/api/project', methods=['POST'])
+def project():
+    try:
+        if 'name' not in request.form:
+            return jsonify({'error': 'No project name provided'}), 400
+        print("received project name")
+        
+        if 'description' not in request.form:
+            return jsonify({'error': 'No product description provided'}), 400
+        print("received description")
+        
+        name = request.form['name']
+        description = request.form['description']
+        
+        project_row = Project(
+            user_id = 1,
+            name = name,
+            description = description
+        )
+        
+        db.session.add(project_row)
+        db.session.commit()  # get project_row.id
+        
+        return jsonify({
+            "success": True,
+            "project_id": project_row.id,
+            "user_id": project_row.user_id,
+            "description": project_row.description
+        }), 202
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+        
 @limiter.limit("10/minute")
 @app.route('/api/persona', methods=['POST'])
 def persona(): 
@@ -168,16 +237,21 @@ def persona():
             return jsonify({'error': 'No image_id provided'}), 400
         print("received image_id")
         
-        if 'user_id' not in request.form:
-            return jsonify({'error': 'No user_id provided'}), 400
-        print("received user_id")
+        # if 'user_id' not in request.form:
+        #     return jsonify({'error': 'No user_id provided'}), 400
+        # print("received user_id")
+        
+        if 'project_id' not in request.form: # user_id findable through project_id
+            return jsonify({'error': 'No project_id provided'}), 400
+        print("received project_id")
         
         # Required fields
         description = request.form['description']
         product_name = request.form['product_name']
         person_desc = request.form['person_description']
         image_id = request.form["image_id"]
-        user_id = request.form["user_id"]
+        # user_id = request.form["user_id"]
+        project_id = request.form["project_id"]
         
         if not product_name or not description or not person_desc:
             return jsonify({'error': 'product_name and description are required'}), 400
@@ -194,10 +268,11 @@ def persona():
         #     return jsonify({'error': 'Invalid image_url'}), 400
         
         persona_row = Persona(
-            user_id      = user_id,
+            # user_id      = user_id,
             product_name = product_name,
             description  = description,
             image_id    = image_id,
+            project_id  = project_id,
             persona_json = {},                 # will fill when job completes
             status       = "processing"        # or "queued"
         )
@@ -224,6 +299,7 @@ def persona():
         return jsonify({
             "success": True,
             "persona_id": persona_row.id,
+            "project_id": persona_row.project_id,
             "openai_job_id": job_id,
             "status": persona_row.status
         }), 202
@@ -310,6 +386,7 @@ def script():
         
         script_row = Script(
             persona_id  = persona.id,
+            project_id = persona.project_id,
             tone        = tone,
             status      = "processing",        # or "queued"
             script_txt = ""
@@ -409,7 +486,8 @@ def video():
         
         video_row = Video(
             script_id = script.id,
-            status = "processing"
+            status = "processing",
+            project_id = script.project_id
         )
         db.session.add(video_row)
         db.session.commit()  # get video_row.id

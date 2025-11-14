@@ -20,6 +20,28 @@ class User(db.Model):
     
     images = db.relationship("Image", backref="user", lazy=True, cascade="all,delete")
 
+class Project(db.Model):
+    __tablename__ = "projects"
+    id = db.Column(db.String, primary_key=True, default=gen_id)
+    user_id = db.Column(db.String, db.ForeignKey("users.id"), nullable=False)
+
+    name = db.Column(db.String, nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_projects_user_created", "user_id", "created_at"),
+    )
+    
+class Project_images(db.Model):
+    __tablename__ = "project_images"
+    
+    project_id = db.Column(db.String, db.ForeignKey("projects.id"), primary_key=True)
+    image_id = db.Column(db.String, db.ForeignKey("images.id"), primary_key=True)
+    
+    __table_args__ = (
+        Index("ix_images_user_created", "user_id", "created_at"),
+    )
 
 class Image(db.Model):
     __tablename__ = "images"
@@ -37,11 +59,11 @@ class Image(db.Model):
 class Persona(db.Model):
     __tablename__ = "personas"
     id = db.Column(db.String, primary_key=True, default=gen_id)
-    user_id = db.Column(db.String, db.ForeignKey("users.id"), nullable=True)
+    # user_id = db.Column(db.String, db.ForeignKey("users.id"), nullable=True)
 
     product_name = db.Column(db.String, nullable=False)
     description = db.Column(db.Text, nullable=False)
-    image_id = db.Column(db.String, nullable=False)
+    project_id = db.Column(db.String, nullable=False)
     
     persona_json = db.Column(SqliteJSON, nullable=False)       # store the GPT persona dict
     persona_txt = db.Column(db.Text, nullable=True)       # full raw text
@@ -61,6 +83,7 @@ class Script(db.Model):
     __tablename__ = "scripts"
     id = db.Column(db.String, primary_key=True, default=gen_id)
     persona_id = db.Column(db.String, db.ForeignKey("personas.id"), nullable=False)
+    project_id = db.Column(db.String, nullable=False)
 
     script_txt = db.Column(db.Text, nullable=True)
     
@@ -79,6 +102,7 @@ class Video(db.Model):
     __tablename__ = "videos"
     id = db.Column(db.String, primary_key=True, default=gen_id)
     script_id = db.Column(db.String, db.ForeignKey("scripts.id"), nullable=False)
+    project_id = db.Column(db.String, nullable=False)
 
     status = db.Column(db.String, nullable=False, default="queued")  # queued|processing|completed|failed
     openai_job_id = db.Column(db.String, index=True)
