@@ -192,9 +192,10 @@ def project():
         
         name = request.form['name']
         description = request.form['description']
+        user_id = 1  # hardcoded for now
         
         project_row = Project(
-            user_id = 1,
+            user_id = user_id,
             name = name,
             description = description
         )
@@ -282,6 +283,7 @@ def persona():
         prompt = generate_persona_prompt(product_name, description, person_desc)
         
         # turn into data URL for OpenAI (works from localhost)
+        print(img.path)
         image_data_url = image_path_to_data_url(img.path)  # <-- This is the slow part
         
         job_id, job_status = enqueue_chatGPT_background(

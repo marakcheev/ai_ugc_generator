@@ -16,7 +16,7 @@ class User(db.Model):
     credits = db.Column(db.Integer, nullable=False, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
-    personas = db.relationship("Persona", backref="user", lazy=True)
+    projects = db.relationship("Project", backref="user", lazy=True)
     
     images = db.relationship("Image", backref="user", lazy=True, cascade="all,delete")
 
@@ -40,7 +40,9 @@ class Project_images(db.Model):
     image_id = db.Column(db.String, db.ForeignKey("images.id"), primary_key=True)
     
     __table_args__ = (
-        Index("ix_images_user_created", "user_id", "created_at"),
+        # This guarantees that (project_id, image_id) is unique
+        # It's redundant when both are primary keys, but harmless
+        db.UniqueConstraint("project_id", "image_id", name="uq_project_image"),
     )
 
 class Image(db.Model):
@@ -64,6 +66,7 @@ class Persona(db.Model):
     product_name = db.Column(db.String, nullable=False)
     description = db.Column(db.Text, nullable=False)
     project_id = db.Column(db.String, nullable=False)
+    image_id = db.Column(db.String, nullable=False)
     
     persona_json = db.Column(SqliteJSON, nullable=False)       # store the GPT persona dict
     persona_txt = db.Column(db.Text, nullable=True)       # full raw text
@@ -76,7 +79,7 @@ class Persona(db.Model):
     scripts = db.relationship("Script", backref="persona", lazy=True, cascade="all,delete")
 
     __table_args__ = (
-        Index("ix_personas_user_created", "user_id", "created_at"),
+        Index("ix_personas_user_created", "project_id", "created_at"),
     )
 
 class Script(db.Model):
