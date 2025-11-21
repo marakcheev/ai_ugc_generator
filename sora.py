@@ -18,12 +18,24 @@ from urllib.parse import urlparse
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
+from flask_login import (
+    UserMixin,
+    login_user,
+    LoginManager,
+    login_user,
+    logout_user,
+    login_required,
+    current_user,
+)
+
+
 from extensions import db, migrate   # <-- import from extensions
 
 JOBS = {}  # job_id -> {"status": "queued|processing|completed|failed", "video_url": None, "message": "", "script": "", "error": None}
 JOBS_LOCK = Lock()
 
 app = Flask(__name__)
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret-key-change-me")
 CORS(app)  # Enable CORS for frontend access
 
 limiter = Limiter(get_remote_address, app=app, default_limits=["60/minute"])
@@ -33,6 +45,15 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
 migrate.init_app(app, db)
+
+
+login_manager = LoginManager()
+login_manager.init_app(app)
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(user_id)
+
 
 from models import User, Persona, Script, Video, Image, Project, Project_images  # noqa: E402,F4
 
@@ -618,6 +639,59 @@ def enqueue_sora_background(prompt, image_path):
             # store=True
         )
     return response.id, getattr(response, "status", "queued")
+
+# Login
+# ------------------------------------------------------------------------------
+
+@app.route("/auth/dev-login", methods=["POST"])
+def dev_login():
+    try:
+        # Validate input (same pattern as your script/persona endpoints)
+        if 'email' not in request.form:
+            return jsonify({'error': 'No email provided'}), 400
+
+        email = request.form['email'].strip()
+        if not email:
+            return jsonify({'error': 'Email cannot be empty'}), 400
+
+        # Find or create user
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            user = User(
+                email=email,
+                credits=20,         # starter credits - change later
+            )
+            db.session.add(user)
+            db.session.commit()
+
+        # Log in user (Flask-Login)
+        login_user(user)
+
+        # Response consistent with your API style
+        return jsonify({
+            'success': True,
+            'user_id': user.id,
+            'email': user.email,
+            'credits': user.credits
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route("/api/me", methods=["GET"])
+@login_required
+def me():
+    return jsonify({
+        "success": True,
+        "id": current_user.id,
+        "email": current_user.email,
+        "credits": current_user.credits,
+    }), 200
+
+
 
 # FUNCTIONS
 # ==============================================================================

@@ -3,13 +3,15 @@ from uuid import uuid4
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.dialects.sqlite import JSON as SqliteJSON
 from sqlalchemy import Index, UniqueConstraint
+from flask_login import UserMixin
+
 
 from extensions import db   # <-- import from extensions, NOT sora
 
 def gen_id():
     return str(uuid4())
 
-class User(db.Model):
+class User(db.Model, UserMixin):
     __tablename__ = "users"
     id = db.Column(db.String, primary_key=True, default=gen_id)
     email = db.Column(db.String, unique=True, nullable=True)   # add google auth later
