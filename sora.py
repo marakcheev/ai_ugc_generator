@@ -680,6 +680,16 @@ def dev_login():
             'success': False,
             'error': str(e)
         }), 500
+        
+@app.route("/auth/logout", methods=["POST"])
+@login_required
+def logout():
+    try:
+        logout_user()  # clears the session cookie
+        return jsonify({"success": True, "message": "Logged out"}), 200
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route("/api/me", methods=["GET"])
 @login_required
@@ -690,7 +700,6 @@ def me():
         "email": current_user.email,
         "credits": current_user.credits,
     }), 200
-
 
 
 # FUNCTIONS
