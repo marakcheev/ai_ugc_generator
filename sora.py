@@ -111,6 +111,7 @@ def serve_upload(filename):
 
 @limiter.limit("30/minute")
 @app.route('/api/save-img', methods=['POST'])
+@login_required
 def save_img():
     try:
         if 'image' not in request.files:
@@ -139,7 +140,7 @@ def save_img():
         
         # Create DB row
         img = Image(
-            user_id = 1,
+            user_id = current_user.id,
             url = public_url,
             path = image_path
         )
@@ -166,8 +167,9 @@ def save_img():
             'started': False,
             'error': str(e)
         }), 500
-        
+
 @app.route('/api/add-project-img', methods=['POST'])
+@login_required        
 def add_img_to_project():
     try:
         if 'image_id' not in request.form:
@@ -201,6 +203,7 @@ def add_img_to_project():
         }), 500
         
 @app.route('/api/project', methods=['POST'])
+@login_required
 def project():
     try:
         if 'name' not in request.form:
@@ -213,10 +216,9 @@ def project():
         
         name = request.form['name']
         description = request.form['description']
-        user_id = 1  # hardcoded for now
         
         project_row = Project(
-            user_id = user_id,
+            user_id = current_user.id,
             name = name,
             description = description
         )
@@ -239,6 +241,7 @@ def project():
         
 @limiter.limit("10/minute")
 @app.route('/api/persona', methods=['POST'])
+@login_required
 def persona(): 
     try: 
         # data = request.form if request.form else request.get_json(force=True, silent=True) or {}
@@ -333,9 +336,11 @@ def persona():
             'success': False,
             'error': str(e)
         }), 500
+
         
 @limiter.limit("60/minute")
 @app.route('/api/persona/<persona_id>/status', methods=['GET'])
+@login_required
 def persona_status(persona_id):
     persona = Persona.query.get_or_404(persona_id)
 
@@ -386,6 +391,7 @@ def persona_status(persona_id):
 
 @limiter.limit("10/minute")
 @app.route('/api/script', methods=['POST'])
+@login_required
 def script(): 
     try: 
         if 'persona_id' not in request.form:
@@ -445,6 +451,7 @@ def script():
      
 @limiter.limit("60/minute")   
 @app.route('/api/script/<script_id>/status', methods=['GET'])
+@login_required
 def script_status(script_id):
     s = Script.query.get_or_404(script_id)
 
@@ -492,9 +499,10 @@ def script_status(script_id):
         "status": s.status,
         "script": s.script_json if s.status == "completed" else None
     }), 200
-    
+
 @limiter.limit("10/minute")
 @app.route('/api/video', methods=['POST'])
+@login_required
 def video(): 
     try:
         if 'script_id' not in request.form:
@@ -538,6 +546,7 @@ def video():
         
 @limiter.limit("60/minute")       
 @app.route('/api/video/<video_id>/status', methods=['GET'])
+@login_required
 def video_status(video_id):
     
     v = Video.query.get_or_404(video_id)
