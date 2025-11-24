@@ -279,7 +279,7 @@ def persona():
         project_id = request.form["project_id"]
         
         if not product_name or not description or not person_desc:
-            return jsonify({'error': 'product_name and description are required'}), 400
+            return jsonify({'error': 'Product Name, Description, and Person Description are required'}), 400
         
         # Resolve image URL: prefer image_id lookup, else accept image_url directly
         img = Image.query.get(image_id)
