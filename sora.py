@@ -28,7 +28,6 @@ from flask_login import (
     current_user,
 )
 
-
 from extensions import db, migrate   # <-- import from extensions
 
 JOBS = {}  # job_id -> {"status": "queued|processing|completed|failed", "video_url": None, "message": "", "script": "", "error": None}
@@ -78,24 +77,8 @@ if not api_key:
 client = OpenAI(api_key=api_key)
 
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-def image_path_to_data_url(image_path: str) -> str:
-    # Convert unsupported input (like WEBP) to JPEG for GPT-5
-    mime = mimetypes.guess_type(image_path)[0] or "image/jpeg"
-    if mime == "image/webp":
-        img = Image.open(image_path).convert("RGB")
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=90)
-        buf.seek(0)
-        raw = buf.read()
-        mime = "image/jpeg"
-    else:
-        with open(image_path, "rb") as f:
-            raw = f.read()
-    b64 = base64.b64encode(raw).decode("utf-8")
-    return f"data:{mime};base64,{b64}"
+from app.utils.files import allowed_file
+from app.utils.images import image_path_to_data_url
 
 
 
@@ -1000,6 +983,6 @@ def job_status(job_id):
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=6767)
     
     
